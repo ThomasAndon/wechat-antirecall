@@ -4,6 +4,7 @@
 #include <mach-o/dyld.h>
 #include <mach-o/loader.h>
 #include <sys/mman.h>
+#include <dlfcn.h>
 #include <unistd.h>
 #include <pthread.h>
 #include <libkern/OSCacheControl.h>
@@ -30,7 +31,7 @@ constexpr size_t revokeContentCacheMaximumCount = 512;
 constexpr size_t revokeContentPreviewMaximumBytes = 240;
 constexpr size_t arm64StubLength = 16;
 
-// Call-site analysis (269340/269341/269574/269575/269576/269577/269578/269579/269619/269624/269628) confirms this function takes exactly
+// Call-site analysis through build 270090 confirms this function takes exactly
 // three arguments. The second argument is the raw XML and the wrapper has already
 // copied it into the build-specific handlerOutput replaceMsg field.
 using ParseRevokeXML = bool (*)(void *, std::string *, void *);
@@ -68,7 +69,7 @@ struct InlineRevokeHookConfig {
 };
 
 // The revoke XML handler is selected only for message-extension types 71/72, so it
-// cannot observe ordinary text/media messages. Builds 269340/269341/269574/269575/269576/269577/269578/269579/269619/269624/269628 therefore carry
+// cannot observe ordinary text/media messages. Verified builds from 269340 through 270090 carry
 // a second inline hook at the common Message finalizer. Call-path analysis shows every incoming
 // Message reaches this function after serverId/msgType/content have been populated
 // and immediately before its type-specific extension parser is dispatched.
@@ -229,6 +230,11 @@ constexpr InlineRevokeHookConfig inlineRevokeHookConfigs[] = {
     // build independently decodes the same output fields (newMsgId=0x1C8,
     // replaceMsg=0x1D0). SLOT moves with __DATA to 0xa043f00.
     {"269628", 0x49aef90, {0xA9BC5FF8, 0xA90157F6, 0xA9024FF4}, 0x49aef9c, 0x1c8, 0x1d0},
+    // 270090 (WeChat 4.1.15.10): IDA and LC_FUNCTION_STARTS bound the parser at
+    // 0x4BBE5CC..0x4BBF6E8. Its recall path still uses the +0x270 guard
+    // and +0xA10 newmsgid store, with fields +0x1C8/+0x1D0. SLOT 0xA35FF00
+    // is in __DATA zero-fill after __common, not copied from the prior build.
+    {"270090", 0x4bbe5cc, {0xA9BC5FF8, 0xA90157F6, 0xA9024FF4}, 0x4bbe5d8, 0x1c8, 0x1d0},
 };
 
 constexpr InlineMessageCaptureHookConfig inlineMessageCaptureHookConfigs[] = {
@@ -384,6 +390,19 @@ constexpr InlineMessageCaptureHookConfig inlineMessageCaptureHookConfigs[] = {
         0x494c1a4,
         {0x39496008, 0x7100051F, 0x7A400820},
         0x494c1b0,
+        0x0f8,
+        0x00c,
+        0x130,
+    },
+    // 270090: the network constructor at 0x4B59D48 writes serverId +0xF8
+    // at 0x4B59E5C and content +0x130 at 0x4B59E80; helper 0x4B5AA14
+    // writes msgType +0x0C before the finalizer call at 0x4B5A1EC.
+    // The early-return flag remains +0x258; SLOT is 0xA35FF08.
+    {
+        "270090",
+        0x4b5b0a0,
+        {0x39496008, 0x7100051F, 0x7A400820},
+        0x4b5b0ac,
         0x0f8,
         0x00c,
         0x130,
@@ -743,7 +762,10 @@ bool isTargetWeChatDylibPath(const char *imageName) {
         return false;
     }
 
-    return hasSuffix(std::string(imageName), "/Contents/Resources/wechat.dylib");
+    constexpr char suffix[] = "/Contents/Resources/wechat.dylib";
+    const size_t length = std::strlen(imageName);
+    return length >= sizeof(suffix) - 1 &&
+        std::memcmp(imageName + length - (sizeof(suffix) - 1), suffix, sizeof(suffix) - 1) == 0;
 }
 
 std::string extractSenderName(const std::string &originalTip) {
@@ -1675,33 +1697,6 @@ struct WeChatDylibImage {
     size_t size;
 };
 
-bool findWeChatDylibImage(WeChatDylibImage &image) {
-    const uint32_t imageCount = _dyld_image_count();
-    for (uint32_t index = 0; index < imageCount; index += 1) {
-        const char *imageName = _dyld_get_image_name(index);
-        if (imageName == nullptr) {
-            continue;
-        }
-
-        if (isTargetWeChatDylibPath(imageName)) {
-            const auto slide = _dyld_get_image_vmaddr_slide(index);
-            uintptr_t start = 0;
-            size_t size = 0;
-            if (!imageAddressRangeForHeader(_dyld_get_image_header(index), slide, start, size)) {
-                return false;
-            }
-
-            image = {
-                static_cast<uintptr_t>(slide),
-                start,
-                size,
-            };
-            return true;
-        }
-    }
-
-    return false;
-}
 
 bool writeHookSlot(void **slot, void *replacement) {
     if (slot == nullptr || replacement == nullptr || !isAddressRangeReadable(slot, sizeof(void *))) {
@@ -2002,11 +1997,7 @@ void installMessageCaptureInlineHook(
     }
 }
 
-void installRevokeTipHook() {
-    WeChatDylibImage image = {};
-    if (!findWeChatDylibImage(image)) {
-        return;
-    }
+void installRevokeTipHook(const WeChatDylibImage &image) {
 
     const std::string buildVersion = currentBundleBuildVersion();
     if (const auto *config = revokeHookConfigForBuild(buildVersion.c_str())) {
@@ -2020,6 +2011,25 @@ void installRevokeTipHook() {
         if (originalFinalizeMessage != nullptr) {
             wechat_antirecall_red_packet_initialize(image.slide, buildVersion.c_str());
         }
+    }
+}
+
+void wechatImageAdded(const mach_header *header, intptr_t slide) {
+    Dl_info info = {};
+    if (header == nullptr || header->magic != MH_MAGIC_64 ||
+        header->cputype != CPU_TYPE_ARM64 || dladdr(header, &info) == 0 ||
+        !isTargetWeChatDylibPath(info.dli_fname)) {
+        return;
+    }
+
+    uintptr_t start = 0;
+    size_t size = 0;
+    if (!imageAddressRangeForHeader(header, slide, start, size)) {
+        return;
+    }
+
+    @autoreleasepool {
+        installRevokeTipHook({static_cast<uintptr_t>(slide), start, size});
     }
 }
 
@@ -2294,7 +2304,7 @@ int wechat_antirecall_message_capture_inline_hook_selftest(void) {
         return 0;
     }
 
-    // Message-finalizer prefix shape used by 269340/269341/269574/269575/269576/269577/269578/269579/269619/269624/269628, followed by a tiny conditional body.
+    // Message-finalizer ldrb/cmp/ccmp prefix, followed by a tiny conditional body.
     // This synthetic fixture uses byte(+0x250)==1 && mode==0 for the true branch.
     // The trampoline's literal load and register branch must preserve NZCV from ccmp
     // so the original b.eq still selects the right path.
@@ -2347,7 +2357,8 @@ int wechat_antirecall_message_capture_inline_hook_selftest(void) {
 
 __attribute__((constructor))
 static void wechat_antirecall_runtime_init() {
-    @autoreleasepool {
-        installRevokeTipHook();
-    }
+    // libwxld can preload this dependency before loading wechat.dylib itself.
+    // dyld reports existing and future images synchronously; future callbacks
+    // run before initializers, unlike an asynchronous retry of a zero hook slot.
+    _dyld_register_func_for_add_image(&wechatImageAdded);
 }

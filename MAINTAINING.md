@@ -4,7 +4,7 @@
 
 用户向的使用说明在 [README.md](README.md)。
 
-实验性自动红包的协议、对象布局与 ABI 证据见 [红包逆向记录](Docs/red-packet-269624.md)。该功能复用已有消息 finalizer hook，默认关闭；目前适配 269624 与 269628，范围独立于防撤回构建表。
+自动红包的协议、对象布局与 ABI 证据见 [红包逆向记录](Docs/red-packet-269624.md)。该功能复用已有消息 finalizer hook，默认关闭；目前适配 269624、269628 与 270090，范围独立于防撤回构建表。用户已在 270090 实测确认防撤回与自动红包可用。
 
 ---
 
@@ -49,7 +49,7 @@
 | --- | --- | --- |
 | `revoke` | 静默防撤回 | 默认（不加 tip 参数） |
 | `revoke-tip` | 提示模式 | `--with-tip` |
-| `runtime-tip` | 内联 hook 的入口改写（仅内联构建；269340/269341/269574/269575/269576/269577/269578/269579/269619/269624/269628 各含两处） | `--runtime-tip` |
+| `runtime-tip` | 内联 hook 的入口改写（仅内联构建；269340/269341/269574/269575/269576/269577/269578/269579/269619/269624/269628/270090 各含两处） | `--runtime-tip` |
 | `update` | 屏蔽自动更新 | `--block-update` / `--update-only` |
 | `multiInstance` | 多开（主二进制） | `--multi-instance` |
 | `multiInstance-extra` | 多开的附加补丁（dylib） | `--multi-instance` |
@@ -85,8 +85,8 @@
 
 这些构建去掉了派发桩，改用**静态入口改写 + 运行时 trampoline**：
 
-- 安装时把目标函数入口的 3 条指令改成 `adrp x16,SLOT; ldr x16,[x16]; br x16`（patches.json 的 `runtime-tip` 目标；269340/269341/269574/269575/269576/269577/269578/269579/269619/269624/269628 同时改写撤回解析器和 Message 终结器）。`SLOT` 落在 `wechat.dylib` `__DATA` 段尾的零填充空隙里。
-- dylib 加载时建立 trampoline（重放原 3 条指令、再跳回入口后第 4 条），并把 hook 函数指针写进 `SLOT`。runtime 通过**解码被改写的入口**自动定位 `SLOT`，无需硬编码。
+- 安装时把目标函数入口的 3 条指令改成 `adrp x16,SLOT; ldr x16,[x16]; br x16`（patches.json 的 `runtime-tip` 目标；269340/269341/269574/269575/269576/269577/269578/269579/269619/269624/269628/270090 同时改写撤回解析器和 Message 终结器）。`SLOT` 落在 `wechat.dylib` `__DATA` 段尾的零填充空隙里。
+- runtime 的 constructor 注册 `_dyld_register_func_for_add_image`，覆盖已加载及随后加载的镜像。回调通过 `dladdr(header)` 精确匹配 `Contents/Resources/wechat.dylib`，使用传入的 header/slide 建立 trampoline（重放原 3 条指令、再跳回入口后第 4 条），在核心库初始化前把 hook 指针写进 `SLOT`。runtime 通过**解码被改写的入口**自动定位 `SLOT`，无需硬编码。
 - 配置在 `Runtime.mm` 的 `inlineRevokeHookConfigs`（build → 入口地址、原始 3 条指令、continuation 地址、字段偏移）。
 
 | build | 入口地址 | SLOT | 备注 |
@@ -111,19 +111,24 @@
 | 269579 | `0x4958830` + `0x48f64e8` | `0x9f57f00` + `0x9f57f08` | 微信 4.1.13.11；相对 269578 均匀 `-0x1C`，字段仍为 `0x1C8`/`0x1D0` 与 `0xF8`/`0x0C`/`0x130` |
 | 269619 | `0x497f908` + `0x491cb1c` | `0x9f9ff00` + `0x9f9ff08` | 微信 4.1.13.51；解析器相对 269579 `+0x270D8`，终结器 `+0x26634`，字段仍为 `0x1C8`/`0x1D0` 与 `0xF8`/`0x0C`/`0x130` |
 | 269624 | `0x49adcc8` + `0x494aedc` | `0xa03ff00` + `0xa03ff08` | 微信 4.1.13.56；解析器与终结器相对 269619 均匀 `+0x2E3C0`，字段仍为 `0x1C8`/`0x1D0` 与 `0xF8`/`0x0C`/`0x130` |
-| 269628 | `0x49aef90` + `0x494c1a4` | `0xa043f00` + `0xa043f08` | 当前安装的微信 4.1.13.60；解析器与终结器相对 269624 均匀 `+0x12C8`，字段仍为 `0x1C8`/`0x1D0` 与 `0xF8`/`0x0C`/`0x130` |
+| 269628 | `0x49aef90` + `0x494c1a4` | `0xa043f00` + `0xa043f08` | 微信 4.1.13.60；解析器与终结器相对 269624 均匀 `+0x12C8`，字段仍为 `0x1C8`/`0x1D0` 与 `0xF8`/`0x0C`/`0x130` |
+| 270090 | `0x4bbe5cc` + `0x4b5b0a0` | `0xa35ff00` + `0xa35ff08` | 微信 4.1.15.10；独立核对函数边界、字段及调用点，不能整体平移旧地址表 |
 
 ⚠️ **入口改写和 dylib 注入必须成对安装**：`--runtime-tip` 会一起完成二者，`RuntimeTipInstaller` 先跑注入。绝不要单独只打入口补丁——缺少 dylib 时 `SLOT` 不会被赋值，函数会跳空指针崩溃。`restore` 恢复 `wechat.dylib` 备份会同时撤销所有入口补丁、`SLOT` 和注入。
 
 内联 hook 引擎（指令编码、trampoline、跳转槽派发）有单元测试覆盖（`InlineHookEngineTests`、`RuntimeRewriteTests`）。
 
+2026-09-13 修复 **270090 启动闪退**：实际加载器会先加载 runtime 依赖，此时系统 dyld 列表还没有核心库。旧 constructor 只枚举一次便返回，两个 SLOT 留为零；收到消息时 `0x4B5A1EC` 调用终结器，入口 `BR X16` 因 `X16=0` 崩溃（LR=`core+0x4B5A1F0`）。同步 add-image 回调解决的是加载时序，不改变补丁地址或字段布局；不能改成主队列异步重试或固定延迟，因为第一次核心函数调用可能先发生。
+
+修复验证使用独立 bundle ID 的真实微信副本：LLDB 确认 `wechatImageAdded` 位于 `dyld4::RuntimeState::notifyLoad` 调用栈中，两个 SLOT 在 `WeChatMain` 前写入；用已终结的合成 Message 调用原闪退入口成功返回，随后到达扫码登录界面；173 项现有测试通过。上述自动化验证未登录真实账号；随后用户在 270090 实测确认防撤回和普通红包自动领取均可用。调试证据在 `work/20260913-runtime-startup-crash/evidence/`。修复需要重新安装新版 runtime，`patches.json` 及其校验和不变。
+
 ---
 
 ## `{content}` 实现
 
-对 269340/269341/269574/269575/269576/269577/269578/269579/269619/269624/269628 arm64 切片的聚焦分析确认：撤回 XML 解析器只服务消息扩展类型 `71/72`，不是所有接收消息的公共路径；输出对象里的 `newmsgid` 也不能当作普通 Message 的 server ID。269340/269341 的字段为 `+0x198`，269574/269575/269576/269577/269578/269579/269619/269624/269628 移动到 `+0x1C8`；十一个解析器入口依次为 `0x462e200`、`0x462e60c`、`0x4905488`、`0x4904ed0`、`0x490521c`、`0x4958824`、`0x495884c`、`0x4958830`、`0x497f908`、`0x49adcc8`、`0x49aef90`。
+对上表已配置双 hook 的 arm64 构建（269340/269341/269574/269575/269576/269577/269578/269579/269619/269624/269628/270090）的聚焦分析确认：撤回 XML 解析器服务消息扩展类型 `71/72`，不是所有接收消息的公共路径；输出对象里的 `newmsgid` 也不能当作普通 Message 的 server ID。269340/269341 的字段为 `+0x198`；其余上述构建为 `+0x1C8`，`replaceMsg` 为 `+0x1D0`。各构建入口地址见上表。
 
-真正的接收路径使用第二个内联 hook：269340 的 `sub_45CE1A4`、269341 的 `sub_45CE5B0`、269574 的 `sub_48A3B20`、269575 的 `sub_48A3568`、269576 的 `sub_48A38B4`、269577 的 `sub_48F64DC`、269578 的 `sub_48F6504`、269579 的 `sub_48F64E8`、269619 的 `sub_491CB1C`、269624 的 `sub_494AEDC` 以及 269628 的 `sub_494C1A4` 是通用 Message 终结器。269628 的网络消息构造函数 `sub_494AE4C` 在调用终结器之前仍已填好：
+真正的接收路径使用第二个内联 hook。270090 的 `sub_4B5B0A0` 是通用 Message 终结器，网络消息构造函数 `sub_4B59D48` 在 `0x4B5A1EC` 调用它之前已填好：
 
 - `serverId`：Message `+0xF8`；
 - `msgType`：Message `+0x0C`；
@@ -131,7 +136,7 @@
 
 构造函数随后无条件调用终结器；runtime 在原终结器之前按 `serverId` 缓存：文本做 trim 和 UTF-8 边界安全截断；媒体使用真实 `msgType` 映射为图片、语音、视频、动画表情、位置、链接、音视频通话或系统消息占位符。撤回 XML 到来时再用其中的 `<newmsgid>` 查表并替换 `{content}`。
 
-269340/269341 的 `runtime-tip` 使用 `SLOT 0x9a9ff00` 与相邻的 `0x9a9ff08`；269574/269575/269576 使用 `__DATA` 尾部的 `0x9ecbf00` 与 `0x9ecbf08`；269577/269578/269579 使用 `0x9f57f00` 与 `0x9f57f08`；269619 使用 `0x9f9ff00` 与 `0x9f9ff08`；269624 使用 `0xa03ff00` 与 `0xa03ff08`；269628 使用 `0xa043f00` 与 `0xa043f08`。缓存只存在于当前微信进程，最多 512 条；文本预览最多 240 个 UTF-8 字节。冷启动前收到、已淘汰或 server ID 为 0 的消息仍会 miss，此时 `replaceContentPlaceholder` 会连同分隔符一起剥掉。其他已支持构建尚未反向确认通用 Message 字段布局，因此仍按冷缓存处理 `{content}`。
+双 hook 的两个 SLOT 地址见上表，270090 使用 `0xa35ff00` 与相邻的 `0xa35ff08`。缓存只存在于当前微信进程，最多 512 条；文本预览最多 240 个 UTF-8 字节。冷启动前收到、已淘汰或 server ID 为 0 的消息仍会 miss，此时 `replaceContentPlaceholder` 会连同分隔符一起剥掉。其他已支持构建尚未反向确认通用 Message 字段布局，因此仍按冷缓存处理 `{content}`。
 
 ---
 
@@ -151,6 +156,8 @@
 ---
 
 ## 逐字节核对记录
+
+历史条目中的“当前安装”指各次分析当日。2026-09-13 核对 `LC_FUNCTION_STARTS` 后纠正：269628 的完整解析器也是 `0x111C`（4380）字节；旧记录的 4072 字节是当时的定向分析窗口，不是完整函数边界。270090 同样为 `0x111C`，不能把固定窗口结束位置当成新版本函数增长的证据。
 
 - **268850 / 268851**：是 `268849` 的连续热修，全部 12 个补丁点 + `SLOT` 零填充槽位都逐字节一致（已对各自的 `wechat.dylib` 逐地址核对），配置直接复用 `268849`。
 - **269077**：`parseRevokeXML` 函数体不变（入口 `stp x24,x23` 等三条 + `entry+0x270` 的 `cbz w0` + `entry+0xA04` 的 `str x0,[x19,#0x168]`），整体重定位到 `0x48a4d68`；三处补丁点（`revoke` `0x48a4fd8`、`revoke-tip` `0x48a576c`、内联 hook 入口 `0x48a4d68`）原始字节都已逐地址核对。
@@ -175,6 +182,43 @@
 - **269624**：微信 4.1.13.56（`CFBundleVersion` 269624；`WeChatBundleVersion` `4.1.13.56`；arm64 切片 SHA-256 `7cf3d4effabc96bdb23fd2da21486388cbcea5fa1f6dfd72a872e0deba60d601`；完整 fat SHA-256 `fe0ce66a8972a5eec9df2238ea93ae07f41f288c6367cd635f6efe7d5d4e1c00`）。269574+ 的撤回解析器几何特征在整个 arm64 切片中仍唯一逐字命中；相对 269619，解析器与终结器均均匀重定位 `+0x2E3C0`。入口 `0x49adcc8`，守卫 `entry+0x270`=`0x49adf38`（`40100034`→`82000014`），`newmsgid` 写入 `entry+0xA10`=`0x49ae6d8`（`60E600F9`→`7FE600F9`）。字段由本构建指令重新解码为 `newMsgId=+0x1C8`、`replaceMsg=+0x1D0`。唯一调用方 `0x49adc44` 仍按 `x0` 输出对象、`x1` 原始 XML、`x2` 标志指针传参。通用 Message 终结器到 `0x494aedc`，`ldrb/cmp/ccmp` 形状唯一命中；网络构造函数 `0x4949b84` 仍把 `serverId` 从来源 `+0x50` 写到 `+0xF8`（`ldr x8,[x23,#0x50]` / `str x8,[x19,#0xF8]`）、内容 `add x0,x19,#0x130`、经 `0x494a850` 把 `msgType` 写到 `+0x0C` 后无条件 `bl 0x494aedc`。`__common` 结束地址 `0xa03d428` 到 `__DATA` 虚拟结束地址 `0xa040000` 是零填充，两个 SLOT 取 `0xa03ff00`/`0xa03ff08`；入口桩 `90B402D0108247F900021FD6` 与 `B0B702B0108647F900021FD6` 均经编码/解码回环验证。8 个更新补丁点通过本构建 `XAppUpdateManager` 相对方法表（selref + chained fixup）按方法名重新解析：`startUpdater` `0x27ceac`、`checkForUpdates:` `0x27f0d8`、`startBackgroundUpdatesCheck:` `0x27f3a8`、`enableAutoUpdate:` `0x27f7c8`，访问器对 `0x28a048`/`0x28a050`/`0x28a058`/`0x28a060`（相对 269619 均匀 `+0x114`），字段仍为 `0x18`/`0x19`。终结器有 28 个直接 `BL` 加 1 个尾调用 `B`。12 处原始字节均与真实 `/Applications/WeChat.app` 逐点核对。debug 构建、133 项完整测试以及 silent、runtime-tip、runtime-tip + block-update、update-only 四种真实安装包 dry-run 均通过。IDA Professional 9.4 对 168MB 切片的定向 Hex-Rays 反编译在约 18 分钟内未完成（与 269619 全库自动分析超时同类），因此本构建以几何特征唯一命中、字段指令重解码、入口桩回环和 dry-run 字节匹配为准。
 - **269628**：当前安装的微信 4.1.13.60（`CFBundleVersion` 269628；`WeChatBundleVersion` `4.1.13.60`；arm64 切片 SHA-256 `c4cc52d856929ce294dfcf63461f81ac646353ff0987a43ad5f4ebbfe9262e42`；完整 fat SHA-256 `deba415351c832722b97fa64649990ebb693a5851080c08d2aed068c3f29ee7e`）。269574+ 的撤回解析器几何特征在整个 arm64 切片中仍唯一逐字命中；相对 269624，解析器与终结器均均匀重定位 `+0x12C8`。入口 `0x49aef90`，守卫 `entry+0x270`=`0x49af200`（`40100034`→`82000014`），`newmsgid` 写入 `entry+0xA10`=`0x49af9a0`（`60E600F9`→`7FE600F9`）。字段由本构建指令重新解码为 `newMsgId=+0x1C8`、`replaceMsg=+0x1D0`。唯一调用方 `0x49aef0c` 仍按 `x0` 输出对象、`x1` 原始 XML、`x2` 标志指针传参。通用 Message 终结器到 `0x494c1a4`，`ldrb/cmp/ccmp` 形状唯一命中（相对 269624 归一化重叠率 `1.0`）；网络构造函数 `0x494ae4c` 仍把 `serverId` 从来源 `+0x50` 写到 `+0xF8`（`ldr x8,[x23,#0x50]` / `str x8,[x19,#0xF8]`）、内容 `add x0,x19,#0x130`、经 `0x494bb18` 把 `msgType` 写到 `+0x0C` 后无条件 `bl 0x494c1a4`。`__common` 结束地址 `0xa041678` 到 `__DATA` 虚拟结束地址 `0xa044000` 是零填充，两个 SLOT 取 `0xa043f00`/`0xa043f08`；入口桩 `B0B402B0108247F900021FD6` 与 `B0B702F0108647F900021FD6` 均经编码/解码回环验证。8 个更新补丁点通过本构建 `XAppUpdateManager` 相对方法表（selref + chained fixup）按方法名重新解析：`startUpdater` `0x27becc`、`checkForUpdates:` `0x27e0f8`、`startBackgroundUpdatesCheck:` `0x27e3c8`、`enableAutoUpdate:` `0x27e7e8`，访问器对 `0x289068`/`0x289070`/`0x289078`/`0x289080`（相对 269624 均匀 `-0xFE0`），字段仍为 `0x18`/`0x19`。终结器有 28 个直接 `BL` 加 1 个尾调用 `B`。12 处原始字节均与真实 `/Applications/WeChat.app` 逐点核对。随后使用 IDA Professional 9.4 对补丁点函数做定向分析（与 269619/269624 相同，168MB 切片跳过全库自动分析和 Hex-Rays）：解析器边界 4072 字节 / 966 条指令 / 140 个基本块，唯一代码 xref 来自 `0x49aef0c`；守卫为 `CBZ W0`，`newmsgid` 写入为 `STR X0, [X19,#0x1C8]`；终结器 29 个代码 xref；网络构造函数保留 `+0xF8` / `+0x130` 访问。12 处原始字节均一致。自动比较 `55/55` 通过。debug 构建、173 项完整测试以及 silent、runtime-tip、runtime-tip + block-update、update-only 四种真实安装包 dry-run 均通过。
 
+- **270090**：微信 4.1.15.10，完整 fat SHA-256 `b5060c38b6e45df22bf867ed33533d51c00e49d4c28c16c04290ec0b5769323c`，arm64 切片 SHA-256 `c1fe19a25b58cd34a19771748a8c8da6ac3b7b7e8695f6e3c49702c9b68fcca9`。解析器 `0x4BBE5CC..0x4BBF6E8`；撤回守卫 `0x4BBE83C` 的 `CBZ W0,0x4BBEA44` 改为同目标无条件跳转（`40100034` → `82000014`）；`0x4BBEFDC` 的 `STR X0,[X19,#0x1C8]` 改为 `STR XZR`（`60E600F9` → `7FE600F9`）。唯一直接调用点 `0x4BBE548` 明确传 x0 输出对象、x1 XML 字符串、x2 标志指针；包装器先复制到输出 `+0x1D0`。类型列表方法写入 71/72。终结器 `0x4B5B0A0..0x4B5B1B4` 有 28 个直接 BL，前缀仍为 `086049391F0500712008407A`；网络构造函数 `0x4B59D48..0x4B5A41C` 在 `0x4B59E5C` 写 ID `+0xF8`，`0x4B59E80` 通过 string 赋值写内容 `+0x130`，经 `0x4B5AA14` 在 `0x4B5AA4C` 写类型 `+0x0C`。`__common` 结束 `0xA35F3E8`，`__DATA` 结束 `0xA360000`，两个 SLOT 位于二者之间。8 个更新入口从 `XAppUpdateManager` 方法表独立恢复为 `0x2768AC`、`0x278AD8`、`0x278DA8`、`0x2791C8`、`0x283A48`、`0x283A50`、`0x283A58`、`0x283A60`，访问器字段仍为 `0x18`/`0x19`。
+
+  本地证据在 `work/20260913-wechat-270090-support/evidence/`：`E-002` 记录结构定位，`E-003` 记录接收链，`E-004` 为 IDA 9.4 导出，`E-005` 记录原始指令与真实函数边界。大二进制关闭全库自动分析，部分 Hex-Rays 输出存在 SP 警告；调用约定以调用点反汇编为准。release 构建及签名、173 项测试、5 种真实二进制 dry-run、隔离副本 3 种安装/幂等/还原、字节不匹配拒绝、运行组件 trampoline 与红包 ABI 离线检查均通过。初始适配阶段的验证限于上述离线检查；随后完成加载时序修复和隔离副本启动取证，用户已在真实微信中确认防撤回与自动红包可用。红包地址和组件标记 `:3` 见专门文档。
+
+---
+
+## X1a0He 2.9.0 逆向对照
+
+研究对象为 [X1a0HeWeChatPlugin 2.9.0 发布二进制](https://github.com/X1a0He/X1a0HeWeChatPlugin/releases/tag/2.9.0)，不是公开源码。arm64 dylib 为 7,377,840 字节，SHA-256 `2cc3e3b0ca8bc65a369c1074f2aa7cc7f54eb8572cb18e7f5e17fbc1687c3bb2`，UUID `A6A47027-32D9-3E47-8607-61C15D1DCDD1`；pkg 中的 dylib 与单独发布文件一致。以下地址均是**插件自身**地址，不是微信 270090 的补丁地址。仅做静态 IDA 分析及字符串解码，未执行插件或安装器。
+
+### 已确认的实现
+
+| 环节 | 二进制证据 | 与本项目的区别 |
+| --- | --- | --- |
+| 注入 | pkg 的 `postinstall` 将插件依赖注入 `Resources/wechat.dylib`，缺失时找 `Frameworks/wechat.dylib` | 同样注入核心 dylib，并非只注入主可执行文件 |
+| 挂钩引擎 | `_DobbyHook` `0x4FAB48`，包装器 `0xBC834`；`0xC75C0` 获取 ObjC IMP，另有 `method_setImplementation` | 同时覆盖原生函数和 ObjC 方法，比本项目两处静态入口改写更广 |
+| 定位 | `0xD4714` / `0xEAFC4` 扫描通配 arm64 指令特征，按 executable segment / slice 查找，并缓存到 `search_pattern_v2` | 本项目安装时仍使用独立确认的精确构建表和 expected 字节；不把动态扫描直接放进安装路径 |
+| 防撤回 | `0x2000EC` 安装全类型 `CoReplace` 替换路径 hook；替代函数 `0x2D5390` 使用 `0x6EF950`–`0x6EF980` 等原生辅助入口 | 不是只改 XML 解析器，也不是简单把撤回函数改成 return |
+| 消息保留 | `0x2D5390` 查询原生消息、保留 shared ownership、重建 `0x280` 字节结果，原消息与提示分开处理 | 该结果对象不能当作本项目 632 字节 Message 或 848 字节 display 直接复制 |
+| 策略 | `0x2D5390` 有自己/他人及消息类型分支；`0x2E0D74` 有联系人黑名单/白名单/off | 本次不引入新的过滤、自动转发或下载功能 |
+| 去重 | `0x20D854` 处理 svrId / running，事件上下文 `+193` 有原子 processed 标志 | 证明有一次性处理控制，不足以证明完整 TTL、淘汰或账号切换语义 |
+| 更新 | `0x1452B8` 安装 `XAppUpdateManager` 启动、手动/后台检查、安装就绪及下载开关 hook | 本项目保留既有 8 处更新控制点，不附带禁日志上报、安全模式等行为 |
+
+`CoReplace` 依赖目标或辅助入口缺失时，上游安装分支保留微信原生行为；已经进入替代函数后，还存在调用原函数和返回空结果等不同失败路径，不能概括成“任何错误都阻止撤回”。自己身份的完整推导、完整逐版本地址表及所有消息类型边界尚未恢复。
+
+上游 `0x14EC24` 打开 `recalled_message_records.sqlite`，`0x159A58` 从 SQLite 恢复历史背景/撤回元数据。这**不能证明**该库保存完整原消息或媒体；已观察到的撤回原消息查询走原生辅助函数，不能仅凭二进制里有 SELECT 字符串就认定为直接读取聊天数据库。
+
+### 延迟加载与采用范围
+
+`0x22928C` 调用 readiness 检查 `0x22A0B0`，未就绪时通过 `dispatch_once` 安装后备路径；`0x30E104` 使用 `dlsym(RTLD_DEFAULT, 动态名称)` 定位目标，挂接 `0x30F9E0`，后者比较符号名并重试就绪检查，诊断明确提到 `WeChatMain`。动态重建的 hook 目标名称尚未恢复，因此不能断言它全局替换了 `dlsym`。
+
+最初的普通 `dlopen(wechat.dylib)` 隔离实验在依赖库 constructor 中能看到核心映像，输出 `PASS_DELAYED_LOAD_DEPENDENCY_VISIBLE`，但它**没有覆盖微信加载器预先加载依赖的实际路径**。随后 270090 闪退的真实副本调试证明：runtime constructor 中核心不可见，之后 WCDYWrapper 的 `0x67ED8 → 0x1ABF0 → 0x9430C → 0x95E04` 路径通过系统 `dlopen` 注册核心。当前已改为系统 dyld 同步 add-image 通知，不需要挂接上游私有 loader 函数、引入 wrapper ABI 或定时重试；详见前面的启动闪退修复记录。
+
+本次借鉴的是：把特征扫描作为离线研究工具、用真实函数边界与调用链批准版本配置、区分原消息与合成提示、明确原生对象所有权，以及可选前提失败时不冒险调用未知地址。前两点用于本次 270090 独立适配，并修正了旧分析窗口与函数边界混淆的问题。若将来增加冷缓存查询或去重，应先独立证明账号/会话/server ID 的键范围与生命周期；上游闭源实现不能替代这些证据。
+
+未发现仓库实现源码或许可证，不复制其 dylib 或反编译代码。本次也不继承安装器删除插件配置、重置 ScreenCapture 授权等副作用。完整证据与反编译片段保留在本地忽略目录 `work/20260913-wechat-270090-support/upstream/evidence.json` 及同目录 IDA 数据库；公开说明依据 [仓库 README](https://github.com/X1a0He/X1a0HeWeChatPlugin) 与 [2.9.0 发布页](https://github.com/X1a0He/X1a0HeWeChatPlugin/releases/tag/2.9.0) 对照，不把 README 的实测声明作为本项目实测结果。
+
 ---
 
 ## 新增一个构建号
@@ -184,6 +228,7 @@
 1. **拿到目标 `wechat.dylib`**：从对应版本的微信 App 里取 `Contents/Resources/wechat.dylib`。
 2. **定位 `parseRevokeXML`**：按已知函数体几何特征（入口 `stp` 序列、`cbz w0`、`str x0,[x19,#0x168]`）在 arm64 切片里搜，确认唯一命中。
    - **几何特征失配时**（函数被重编译，命中数为 0 或 >1，如 `269332`）：改用**参考二进制 diff**。取一个已支持的邻近构建（如从腾讯 CDN `WeChatMac_4.1.x.dmg` 下载 4.1.11），在参考里用几何特征定位 `parseRevokeXML`，把函数体"屏蔽掉地址相关立即数（`adrp`/`bl`/`b`/`b.cond`/`cbz`/`ldr literal` 的偏移）后的指令形状"在新切片里滑窗匹配，唯一强命中即目标函数；再用 `SequenceMatcher` 对齐把 `cbz`/`str` 逐条映射过去。
+   - **边界与匹配置信度**：先读 `LC_FUNCTION_STARTS` 确定真实函数范围；不要把旧脚本的固定 4072 字节窗口当作函数长度。记录候选数量、最佳与次佳匹配，随后用字段写入、直接调用方和类型派发交叉核对。内容字段可能通过 string 赋值调用写入，不能只寻找 `STR ...,#0x130`。
 3. **确定补丁点**：
    - `revoke`：入口 `cbz`（`E00F0034` → `7F000014`）。**注意分支偏移可能变**（`269332` 是 `cbz w0,+0x208`），补丁的 `b` 要跳到与 `cbz` 相同的目标。
    - `revoke-tip`：入口保持 + `str x0,[x19,#0x168]`（`60B600F9` → `7FB600F9`）。**字段偏移不要照抄**：从本二进制的 `str` 指令重新解码 `newMsgId` 偏移（`269332` 已从 `0x168` 变为 `0x198`），`replaceMsg` = `newMsgId + 8`（再用函数体内 `ldr …,[x19,#replace]` 交叉核对）。

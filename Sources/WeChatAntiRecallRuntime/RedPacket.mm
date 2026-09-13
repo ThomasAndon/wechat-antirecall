@@ -108,7 +108,7 @@ std::optional<Packet> parse(const std::string &raw) {
 }
 
 bool canOpen(int retcode, bool sender, int received, int status, int type, bool hasTiming) {
-    // PayRedEnvelopeCoverViewModel: 269624 sub_126FAE4 / 269628 sub_126F6B4.
+    // PayRedEnvelopeCoverViewModel: 269624 sub_126FAE4 / 269628 sub_126F6B4 / 270090 sub_12E25E4.
     return retcode == 0 && !sender && received == 0 && (status == 2 || status == 3) &&
         (type == 0 || type == 1 || type == 3) && hasTiming;
 }
@@ -233,6 +233,23 @@ constexpr Profile kProfiles[] = {
             {0x4e181c, {0xd10303ff, 0xa9085ff8, 0xa90957f6}},
             {0x40d72e0, {0xd10503ff, 0xa90f67fa, 0xa9105ff8}},
             {0x40d6af0, {0xa9bc6ffc, 0xa90157f6, 0xa9024ff4}},
+        },
+    },
+    {
+        "270090", 0x17000, 0x6fc7930,
+        0x4b5e924, 0x384ac8, 0x4511cbc, 0x4418930,
+        0x42d4d70, 0x42d4d78, 0x4e157c,
+        0x9a599b8, 0x9a5e7a0, 0x9cc11b8, 0x9cc1238, 0x9cf3df8,
+        {
+            {0x4b5e924, {0xd101c3ff, 0xa9035ff8, 0xa90457f6}},
+            {0x384ac8, {0xa9be4ff4, 0xa9017bfd, 0x910043fd}},
+            {0x4511cbc, {0xb002ec08, 0xf9473500, 0xd65f03c0}},
+            {0x4418930, {0xd107c3ff, 0xa91a67fa, 0xa91b5ff8}},
+            {0x42d4d70, {0xf9401c00, 0x17ff82cc, 0xf9401c00}},
+            {0x42d4d78, {0xf9401c00, 0x17ff83c9, 0xf9401c00}},
+            {0x4e157c, {0xd10303ff, 0xa9085ff8, 0xa90957f6}},
+            {0x42ce06c, {0xd10503ff, 0xa90f67fa, 0xa9105ff8}},
+            {0x42cd87c, {0xa9bc6ffc, 0xa90157f6, 0xa9024ff4}},
         },
     },
 };
@@ -517,7 +534,7 @@ red_packet::Subscription fakePacketSubscribe(red_packet::NativeTask *task,
 
 extern "C" {
 const char *wechat_antirecall_red_packet_runtime_version(void) {
-    return "WeChatAntiRecallRedPacket:2";
+    return "WeChatAntiRecallRedPacket:3";
 }
 int wechat_antirecall_red_packet_parse(const char *xml) {
     return xml && red_packet::parse(xml).has_value();

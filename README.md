@@ -10,6 +10,8 @@
 > - 安装前请先**完全退出微信**。
 > - 工具会修改微信 App，但每次安装都会自动保留备份，可以随时还原。
 > - 如果微信升级后防撤回消失，通常重新检测并安装一次即可。
+> - 支持 **微信 4.1.15.10（270090）**，用户已实测确认防撤回和自动领取红包可用。
+> - 已修复运行组件早于微信核心库加载时的启动闪退。已安装旧组件的用户需使用新版工具重新安装，单独更新补丁数据不会修复。
 
 ---
 
@@ -21,7 +23,7 @@
 | 显示“谁在什么时候撤回了什么” | **自定义提示** |
 | 避免微信自动升级后覆盖补丁 | **屏蔽自动更新** |
 | 同时登录多个微信账号 | **微信多开** |
-| 自动领取新收到的普通红包 | **自动红包（实验，269624 / 269628）** |
+| 自动领取新收到的普通红包 | **自动红包（269624 / 269628 / 270090）** |
 | 回到修改前的原版微信 | **恢复 / 卸载** |
 
 普通用户只需要使用图形界面，不需要打开终端，也不需要理解补丁地址或构建参数。
@@ -100,7 +102,7 @@
 
 > 如果页面提示无权读取已保存的短语，按页面按钮为本 App 开启「完全磁盘访问」，然后退出并重新打开本 App。
 
-> `{content}` 的完整内容预览目前只在构建号 **269340、269341、269574、269575、269576、269577、269578、269579、269619、269624、269628** 上启用，并且只能读取本次微信启动后收到的消息。其他情况会自动省略内容，不会显示多余的冒号或空白。
+> `{content}` 的完整内容预览目前只在构建号 **269340、269341、269574、269575、269576、269577、269578、269579、269619、269624、269628、270090** 上启用，并且只能读取本次微信启动后收到的消息。其他情况会自动省略内容，不会显示多余的冒号或空白。
 
 ### 屏蔽自动更新
 
@@ -116,11 +118,13 @@
 - 副本默认不会抢占微信网页链接。
 - 多开不会修改原始微信，也不依赖当前微信构建号。
 
-### 自动红包（实验功能）
+### 自动红包
 
-目前只适配 **微信 4.1.13、构建 269624 与 269628**，默认关闭。已完成静态逆向与离线测试，**尚未完成真实红包领取验证**。
+支持 **微信 4.1.13（269624 / 269628）及 4.1.15（270090）**，默认关闭。**用户已在微信 4.1.15.10（270090）实测确认普通红包自动领取可用。**
 
 打开「自动红包」，先按页面提示退出微信并安装或更新运行组件，再开启「自动领取新红包」。此功能使用自定义撤回提示模式；更新组件后需要重启微信。
+
+此次新增构建需更新运行组件；旧组件不会因更新补丁数据自动获得红包适配。
 
 命令行用户可直接使用下方的 [CLI 安装与自动红包命令](#自动红包设置)。
 
@@ -301,6 +305,7 @@ CLI 会在修改签名前自动保存微信主程序、Helper 和扩展的 entit
 | 4.1.13 | `269619` | ✅ | ✅ | ✅ | ✅ | — |
 | 4.1.13 | `269624` | ✅ | ✅ | ✅ | ✅ | — |
 | 4.1.13 | `269628` | ✅ | ✅ | ✅ | ✅ | — |
+| 4.1.15 | `270090` | 支持 | 支持 | 支持 | 支持 | — |
 
 说明：
 
@@ -315,44 +320,45 @@ CLI 会在修改签名前自动保存微信主程序、Helper 和扩展的 entit
 
 ## 进阶用户命令行
 
-以下命令在仓库根目录执行，直接使用 SwiftPM 构建的独立 CLI。
+以下命令在仓库根目录执行，通过 `swift run` 运行 CLI，无需打包图形 App，也不依赖 `dist` 目录。
 
 ### 构建
 
 ```bash
-swift build -c release --product wechat-antirecall
 swift build -c release --product WeChatAntiRecallRuntime
-WXAR_BIN="$(swift build -c release --show-bin-path)"
+WXAR_RUNTIME="$(swift build -c release --show-bin-path)/libWeChatAntiRecallRuntime.dylib"
 ```
 
 要求 macOS 12+、Swift 5.9+。
 
-后续命令使用 `WXAR_BIN` 定位构建产物。不同 SwiftPM 版本的输出目录可能不同，使用 `--show-bin-path` 获取本机实际路径。
+`swift run -c release wechat-antirecall` 会按需构建 CLI。运行组件路径通过 `--show-bin-path` 获取，不硬编码 SwiftPM 输出目录。安装前先完全退出微信；以下命令以普通用户运行。若系统拒绝访问微信设置，请为执行命令的终端（如 Terminal、iTerm 或 Warp）开启「完全磁盘访问」，退出并重新打开终端后重试。不要用 `sudo` 运行红包或提示设置命令，否则可能写入 root 用户的配置；`sudo` 也不能绕过 macOS 隐私权限。
 
 ### 查看版本和支持状态
 
 ```bash
-"$WXAR_BIN/wechat-antirecall" versions --app /Applications/WeChat.app
+swift run -c release wechat-antirecall versions --app /Applications/WeChat.app --config ./patches.json
 ```
 
 ### 只检查，不修改
 
 ```bash
-"$WXAR_BIN/wechat-antirecall" install --dry-run --app /Applications/WeChat.app
+swift run -c release wechat-antirecall install --dry-run --app /Applications/WeChat.app --config ./patches.json
 ```
 
 ### 安装静默防撤回
 
 ```bash
-sudo "$WXAR_BIN/wechat-antirecall" install --app /Applications/WeChat.app
+swift run -c release wechat-antirecall install --app /Applications/WeChat.app --config ./patches.json
 ```
 
 ### 安装自定义提示并屏蔽更新
 
 ```bash
-"$WXAR_BIN/wechat-antirecall" tip-phrase set "已拦截 {from} 于 {time} 撤回：{content}"
-sudo "$WXAR_BIN/wechat-antirecall" install \
+swift run -c release wechat-antirecall tip-phrase set "已拦截 {from} 于 {time} 撤回：{content}" --app /Applications/WeChat.app
+swift run -c release wechat-antirecall install \
   --runtime-tip \
+  --runtime-dylib "$WXAR_RUNTIME" \
+  --config ./patches.json \
   --block-update \
   --app /Applications/WeChat.app
 ```
@@ -360,7 +366,7 @@ sudo "$WXAR_BIN/wechat-antirecall" install \
 ### 创建多开副本
 
 ```bash
-sudo "$WXAR_BIN/wechat-antirecall" clone \
+swift run -c release wechat-antirecall clone \
   --count 2 \
   --output-dir /Applications \
   --app /Applications/WeChat.app
@@ -368,37 +374,41 @@ sudo "$WXAR_BIN/wechat-antirecall" clone \
 
 ### 自动红包设置
 
-先按上面的「构建」准备 CLI 和运行组件。**完全退出微信**后，安装或更新组件并开启自动红包：
+**先完全退出微信**。以下命令可独立执行：构建组件、安装防撤回与红包运行组件，然后开启自动红包。步骤通过 `&&` 串联，安装失败就不会继续开启。安装会自动备份并重新签名微信；不屏蔽更新，不改变自定义提示短语。
 
 ```bash
-"$WXAR_BIN/wechat-antirecall" install --runtime-tip \
-  --runtime-dylib "$WXAR_BIN/libWeChatAntiRecallRuntime.dylib" \
-  --config "$PWD/patches.json" \
-  --app /Applications/WeChat.app
-
-"$WXAR_BIN/wechat-antirecall" red-packet on --delay-ms 500
+swift build -c release --product WeChatAntiRecallRuntime && \
+swift run -c release wechat-antirecall install \
+  --app /Applications/WeChat.app \
+  --config ./patches.json \
+  --runtime-tip \
+  --runtime-dylib "$(swift build -c release --show-bin-path)/libWeChatAntiRecallRuntime.dylib" && \
+swift run -c release wechat-antirecall red-packet on \
+  --app /Applications/WeChat.app --delay-ms 500 && \
+swift run -c release wechat-antirecall red-packet get \
+  --app /Applications/WeChat.app --json
 ```
 
-随后重新打开微信。`--delay-ms` 可设为 0–5000，省略时保留当前等待时间，初始值为 500 毫秒。
+最后的 JSON 应显示 `settings.enabled: true`、`supported: true`、`runtimeAvailable: true`，然后重新打开微信。**此开关会自动发起普通红包的领取请求**；实际领取结果以微信显示为准。`--delay-ms` 可设为 0–5000，省略时保留当前等待时间，初始值为 500 毫秒。安装成功但设置写入失败时，先解决终端的完全磁盘访问权限，再单独重试上面的 `red-packet on` 和 `get`；不要重置微信配置。
 
 查看设置和运行组件是否包含此功能：
 
 ```bash
-"$WXAR_BIN/wechat-antirecall" red-packet get --json
+swift run -c release wechat-antirecall red-packet get --app /Applications/WeChat.app --json
 ```
 
 关闭自动红包：
 
 ```bash
-"$WXAR_BIN/wechat-antirecall" red-packet off
+swift run -c release wechat-antirecall red-packet off --app /Applications/WeChat.app
 ```
 
-`red-packet` 设置命令使用普通用户权限；支持 `--app` 指定目标微信。目前仅适配构建 269624 与 269628。`get` 显示配置和组件检测结果，开启设置本身不代表已验证真实领取成功。
+`red-packet` 设置命令使用普通用户权限；支持 `--app` 指定目标微信。目前仅适配构建 269624、269628 与 270090。`get` 显示配置和组件检测结果。
 
 ### 从备份恢复
 
 ```bash
-sudo "$WXAR_BIN/wechat-antirecall" restore \
+swift run -c release wechat-antirecall restore \
   --binary Contents/Resources/wechat.dylib \
   --backup /Applications/WeChat.app/Contents/Resources/wechat.dylib.wechat-antirecall-backup-YYYYMMDD-HHMMSS \
   --app /Applications/WeChat.app
@@ -407,7 +417,7 @@ sudo "$WXAR_BIN/wechat-antirecall" restore \
 完整参数：
 
 ```bash
-"$WXAR_BIN/wechat-antirecall" help
+swift run -c release wechat-antirecall help
 ```
 
 </details>
