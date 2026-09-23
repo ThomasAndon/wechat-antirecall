@@ -1,4 +1,5 @@
 import XCTest
+import CoreFoundation
 @testable import WeChatAntiRecall
 
 final class RecallTipPhraseTests: XCTestCase {
@@ -291,6 +292,41 @@ final class RecallTipPhraseTests: XCTestCase {
 
         try store.setProbeEnabled(false)
         XCTAssertFalse(try store.isProbeEnabled())
+    }
+
+    func testDefaultPreferenceStoreUsesSystemPreferences() throws {
+        let domain = "com.wechat-antirecall.tests.\(UUID().uuidString)"
+        let store = RecallTipPreferenceStore(domain: domain)
+        let phrase = try RecallTipPhrase("system preference phrase")
+        defer {
+            try? store.reset()
+            CFPreferencesSetValue(
+                RecallTipPreferenceStore.probeKey as CFString,
+                nil,
+                domain as CFString,
+                kCFPreferencesCurrentUser,
+                kCFPreferencesAnyHost)
+            CFPreferencesSynchronize(
+                domain as CFString,
+                kCFPreferencesCurrentUser,
+                kCFPreferencesAnyHost)
+        }
+
+        try store.save(phrase)
+        try store.setProbeEnabled(true)
+
+        XCTAssertEqual(try store.load(), phrase)
+        XCTAssertTrue(try store.isProbeEnabled())
+        XCTAssertEqual(
+            CFPreferencesCopyValue(
+                RecallTipPreferenceStore.key as CFString,
+                domain as CFString,
+                kCFPreferencesCurrentUser,
+                kCFPreferencesAnyHost) as? String,
+            phrase.text)
+
+        try store.reset()
+        XCTAssertNil(try store.load())
     }
 
     func testPreferenceResetDoesNotCreateMissingPlist() throws {
