@@ -319,6 +319,13 @@ final class RecallTipPhraseTests: XCTestCase {
         XCTAssertTrue(try store.isProbeEnabled())
         XCTAssertEqual(
             CFPreferencesCopyValue(
+                RecallTipPreferenceStore.probeKey as CFString,
+                domain as CFString,
+                kCFPreferencesCurrentUser,
+                kCFPreferencesAnyHost) as? Bool,
+            true)
+        XCTAssertEqual(
+            CFPreferencesCopyValue(
                 RecallTipPreferenceStore.key as CFString,
                 domain as CFString,
                 kCFPreferencesCurrentUser,

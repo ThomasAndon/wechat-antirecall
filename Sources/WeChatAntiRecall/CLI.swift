@@ -465,7 +465,7 @@ struct RecallTipPreferenceStore {
 
     private func preferenceValue(forKey key: String) throws -> Any? {
         if usesSystemPreferences {
-            _ = synchronizeSystemPreferences()
+            try synchronizeSystemPreferences()
             let value = CFPreferencesCopyValue(
                 key as CFString,
                 domain as CFString,
@@ -490,13 +490,7 @@ struct RecallTipPreferenceStore {
                 preferenceUser,
                 kCFPreferencesAnyHost
             )
-            guard synchronizeSystemPreferences() else {
-                throw ToolError.fileOperationFailed(
-                    operation: "同步微信偏好设置",
-                    path: domain,
-                    underlying: "CFPreferencesSynchronize returned false"
-                )
-            }
+            try synchronizeSystemPreferences()
             return
         }
 
@@ -516,12 +510,18 @@ struct RecallTipPreferenceStore {
         try writePreferences(preferences)
     }
 
-    private func synchronizeSystemPreferences() -> Bool {
-        CFPreferencesSynchronize(
+    private func synchronizeSystemPreferences() throws {
+        guard CFPreferencesSynchronize(
             domain as CFString,
             preferenceUser,
             kCFPreferencesAnyHost
-        )
+        ) else {
+            throw ToolError.fileOperationFailed(
+                operation: "同步微信偏好设置",
+                path: domain,
+                underlying: "CFPreferencesSynchronize returned false"
+            )
+        }
     }
 
     private func readPreferences() throws -> [String: Any] {
