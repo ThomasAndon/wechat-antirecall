@@ -417,7 +417,6 @@ struct RecallTipPreferenceStore {
     let domain: String
 
     private let usesSystemPreferences: Bool
-    private let preferenceUser: CFString
 
     var preferenceLocationDescription: String {
         usesSystemPreferences ? "CFPreferences domain \(domain)" : preferenceFileURL.path
@@ -430,7 +429,6 @@ struct RecallTipPreferenceStore {
         let resolvedHomeDirectory = homeDirectory ?? RecallTipPreferenceStore.defaultHomeDirectory()
         self.domain = domain
         usesSystemPreferences = homeDirectory == nil
-        preferenceUser = RecallTipPreferenceStore.defaultPreferenceUser()
         preferenceFileURL = resolvedHomeDirectory
             .appendingPathComponent("Library/Containers/\(domain)/Data/Library/Preferences")
             .appendingPathComponent("\(domain).plist")
@@ -463,13 +461,13 @@ struct RecallTipPreferenceStore {
         try setPreferenceValue(enabled, forKey: Self.probeKey)
     }
 
-    private func preferenceValue(forKey key: String) throws -> Any? {
+    func preferenceValue(forKey key: String) throws -> Any? {
         if usesSystemPreferences {
             try synchronizeSystemPreferences()
             let value = CFPreferencesCopyValue(
                 key as CFString,
                 domain as CFString,
-                preferenceUser,
+                kCFPreferencesCurrentUser,
                 kCFPreferencesAnyHost
             )
             // Releases prior to this fix wrote the container plist directly. Keep reading
@@ -481,13 +479,14 @@ struct RecallTipPreferenceStore {
         return try readPreferences()[key]
     }
 
-    private func setPreferenceValue(_ value: Any?, forKey key: String) throws {
+    func setPreferenceValue(_ value: Any?, forKey key: String) throws {
         if usesSystemPreferences {
+            try requireUserContext()
             CFPreferencesSetValue(
                 key as CFString,
                 value as CFPropertyList?,
                 domain as CFString,
-                preferenceUser,
+                kCFPreferencesCurrentUser,
                 kCFPreferencesAnyHost
             )
             try synchronizeSystemPreferences()
@@ -510,10 +509,21 @@ struct RecallTipPreferenceStore {
         try writePreferences(preferences)
     }
 
+    // cfprefsd only redirects a sandboxed app's domain to its container for the calling
+    // user; under sudo the request would go to root's cfprefsd instead.
+    private func requireUserContext() throws {
+        if geteuid() == 0,
+           let sudoUser = ProcessInfo.processInfo.environment["SUDO_USER"],
+           sudoUser != "root" {
+            throw ToolError.usage("微信偏好设置需以当前用户身份修改，请不要使用 sudo 运行此命令。")
+        }
+    }
+
     private func synchronizeSystemPreferences() throws {
+        try requireUserContext()
         guard CFPreferencesSynchronize(
             domain as CFString,
-            preferenceUser,
+            kCFPreferencesCurrentUser,
             kCFPreferencesAnyHost
         ) else {
             throw ToolError.fileOperationFailed(
@@ -573,16 +583,6 @@ struct RecallTipPreferenceStore {
         }
 
         return FileManager.default.homeDirectoryForCurrentUser
-    }
-
-    private static func defaultPreferenceUser() -> CFString {
-        if geteuid() == 0,
-           let sudoUser = ProcessInfo.processInfo.environment["SUDO_USER"],
-           sudoUser != "root" {
-            return sudoUser as CFString
-        }
-
-        return kCFPreferencesCurrentUser
     }
 }
 
@@ -849,7 +849,7 @@ struct CLI {
         let options = try RedPacketOptions(arguments)
         let info = try readAppInfo(appPath: options.appPath)
         let store = RedPacketPreferenceStore(
-            preferenceFileURL: RecallTipPreferenceStore(domain: info.bundleIdentifier).preferenceFileURL)
+            preferences: RecallTipPreferenceStore(domain: info.bundleIdentifier))
         let runtimeData = try? Data(contentsOf: info.appURL.appendingPathComponent(RuntimeTipInstaller.destinationDylibPath), options: .mappedIfSafe)
         let runtimeAvailable = runtimeData?.range(of: Data(RedPacketSettings.runtimeMarker.utf8)) != nil
         var settings = options.enabled == false ? ((try? store.load()) ?? RedPacketSettings()) : try store.load()

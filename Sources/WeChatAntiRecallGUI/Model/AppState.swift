@@ -79,6 +79,7 @@ final class AppState: ObservableObject {
         guard let versions else { return false }
         return versions.supported
             && versions.features.tip
+            && versions.installedBuildTargets.contains("revoke-tip")
             && versions.installedBuildTargets.contains("runtime-tip")
             && !versions.runtimeTipSupported
     }

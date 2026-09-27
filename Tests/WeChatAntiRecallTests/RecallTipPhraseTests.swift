@@ -313,6 +313,9 @@ final class RecallTipPhraseTests: XCTestCase {
                 domain as CFString,
                 kCFPreferencesCurrentUser,
                 kCFPreferencesAnyHost)
+            try? FileManager.default.removeItem(
+                at: FileManager.default.homeDirectoryForCurrentUser
+                    .appendingPathComponent("Library/Preferences/\(domain).plist"))
         }
 
         try store.save(phrase)
